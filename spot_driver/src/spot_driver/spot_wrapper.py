@@ -6,6 +6,7 @@ from bosdyn.client.async_tasks import AsyncPeriodicQuery, AsyncTasks
 from bosdyn.geometry import EulerZXY
 
 from bosdyn.client.robot_state import RobotStateClient
+from bosdyn.client.local_grid import LocalGridClient
 from bosdyn.client.robot_command import RobotCommandClient, RobotCommandBuilder
 from bosdyn.client.graph_nav import GraphNavClient
 from bosdyn.client.frame_helpers import get_odom_tform_body
@@ -34,7 +35,8 @@ side_image_sources = ['left_fisheye_image', 'right_fisheye_image', 'left_depth',
 """List of image sources for side image periodic query"""
 rear_image_sources = ['back_fisheye_image', 'back_depth']
 """List of image sources for rear image periodic query"""
-
+local_grid_sources = ['terrain','terrain_valid','intensity','no_step','obstacle_distance']
+"""List of local grid layers for periodic query"""
 class AsyncRobotState(AsyncPeriodicQuery):
     """Class to get robot state at regular intervals.  get_robot_state_async query sent to the robot at every tick.  Callback registered to defined callback function.
 
@@ -54,6 +56,27 @@ class AsyncRobotState(AsyncPeriodicQuery):
     def _start_query(self):
         if self._callback:
             callback_future = self._client.get_robot_state_async()
+            callback_future.add_done_callback(self._callback)
+            return callback_future
+
+class AsyncLocalGrid(AsyncPeriodicQuery):
+    """Class to get local grids at regular intervals.  get_local_grids query sent to the robot at every tick.  Callback registered to defined callback function.
+
+            Attributes:
+                client: The Client to a service on the robot
+                logger: Logger object
+                rate: Rate (Hz) to trigger the query
+                callback: Callback function to call when the results of the query are available
+    """
+    def __init__(self, client, logger, rate, callback, local_grid_requests):
+        super(AsyncLocalGrid, self).__init__("local-grid", client, logger, period_sec=1.0 / max(rate, 1.0))
+        self._callback = None
+        if rate > 0.0:
+            self._callback = callback
+        self._local_grid_requests = local_grid_requests
+    def _start_query(self):
+        if self._callback:
+            callback_future = self._client.get_local_grids_async(self._local_grid_requests)
             callback_future.add_done_callback(self._callback)
             return callback_future
 
@@ -241,6 +264,11 @@ class SpotWrapper():
         for source in rear_image_sources:
             self._rear_image_requests.append(build_image_request(source, image_format=image_pb2.Image.FORMAT_RAW))
 
+        # Leaving this in here for now, just until testing completes
+        self._local_grid_requests = []
+        for grid in local_grid_sources:
+            self._local_grid_requests.append(grid) # redundant but follows formatting
+
         try:
             self._sdk = create_standard_sdk('ros_spot')
         except Exception as e:
@@ -269,6 +297,7 @@ class SpotWrapper():
                 self._lease_wallet = self._lease_client.lease_wallet
                 self._image_client = self._robot.ensure_client(ImageClient.default_service_name)
                 self._estop_client = self._robot.ensure_client(EstopClient.default_service_name)
+                self._grid_client = self._robot.ensure_client(LocalGridClient.default_service_name)
             except Exception as e:
                 self._logger.error("Unable to create client service: %s", e)
                 self._valid = False
@@ -291,10 +320,12 @@ class SpotWrapper():
             self._rear_image_task = AsyncImageService(self._image_client, self._logger, max(0.0, self._rates.get("rear_image", 0.0)), self._callbacks.get("rear_image", lambda:None), self._rear_image_requests)
             self._idle_task = AsyncIdle(self._robot_command_client, self._logger, 10.0, self)
 
+            self._local_grid_task = AsyncLocalGrid(self._grid_client, self.logger, max(0.0, self._rates.get("local_grid", 0.0)), self._callbacks.get("local_grid", lambda:None), self._local_grid_requests)
+
             self._estop_endpoint = None
 
             self._async_tasks = AsyncTasks(
-                [self._robot_state_task, self._robot_metrics_task, self._lease_task, self._front_image_task, self._side_image_task, self._rear_image_task, self._idle_task])
+                [self._robot_state_task, self._robot_metrics_task, self._lease_task, self._front_image_task, self._side_image_task, self._rear_image_task, self._idle_task, self._local_grid_task])
 
             self._robot_id = None
             self._lease = None
@@ -318,6 +349,11 @@ class SpotWrapper():
     def robot_state(self):
         """Return latest proto from the _robot_state_task"""
         return self._robot_state_task.proto
+
+    @property
+    def local_grids(self):
+        """Return latest local grids from _local_grid_task"""
+        return self._local_grid_task.proto
 
     @property
     def metrics(self):

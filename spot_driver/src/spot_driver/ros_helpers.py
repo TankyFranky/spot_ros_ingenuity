@@ -9,6 +9,7 @@ from geometry_msgs.msg import PoseWithCovariance
 from geometry_msgs.msg import TwistWithCovariance
 from geometry_msgs.msg import TwistWithCovarianceStamped
 from nav_msgs.msg import Odometry
+from grid_map_msgs.msg import GridMap
 
 from spot_msgs.msg import Metrics
 from spot_msgs.msg import LeaseArray, LeaseResource
@@ -197,6 +198,22 @@ def GetJointStatesFromState(state, spot_wrapper):
         joint_state.effort.append(joint.load.value)
 
     return joint_state
+
+def GetLocalGridsFromState(grid, spot_wrapper):
+    """Maps local grid data from robot state proto to ROS GridMap message
+
+    Args:
+        data: Robot State proto
+        spot_wrapper: A SpotWrapper object
+    Returns:
+        GridMap message
+    """
+
+    # terrain + terrain_valid = height map with eronious sensor readings removed
+
+    grid_map = GridMap()
+    local_time = spot_wrapper.robotToLocalTime(grid.header.response_timestamp)
+    grid_map.header.stamp = rospy.Time(local_time.seconds, local_time.nanos)
 
 def GetEStopStateFromState(state, spot_wrapper):
     """Maps eStop state data from robot state proto to ROS EStopArray message

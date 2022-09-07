@@ -1,13 +1,14 @@
 import rospy
 
 from std_srvs.srv import Trigger, TriggerResponse, SetBool, SetBoolResponse
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from tf2_msgs.msg import TFMessage
 from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import TwistWithCovarianceStamped, Twist, Pose
 from nav_msgs.msg import Odometry
+from grid_map_msgs.msg import GridMap
 
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.api import geometry_pb2, trajectory_pb2
@@ -57,6 +58,7 @@ class SpotROS():
         self.callbacks["front_image"] = self.FrontImageCB
         self.callbacks["side_image"] = self.SideImageCB
         self.callbacks["rear_image"] = self.RearImageCB
+        self.callbacks["local_grid"] = self.LocalGridCB # callback added to dictionary.
 
     def RobotStateCB(self, results):
         """Callback for when the Spot Wrapper gets new robot state data.
@@ -233,6 +235,18 @@ class SpotROS():
 
             self.populate_camera_static_transforms(data[0])
             self.populate_camera_static_transforms(data[1])
+
+    def LocalGridCB(self, results):
+        """Callback for when the Spot Wrapper gets new rear image data.
+
+        Args:
+            results: FutureWrapper object of AsyncPeriodicQuery callback
+        """
+
+        data = self.spot_wrapper.local_grids
+
+        if data:
+
 
     def handle_claim(self, req):
         """ROS service handler for the claim service"""
@@ -491,7 +505,7 @@ class SpotROS():
         rospy.init_node('spot_ros', anonymous=True)
         rate = rospy.Rate(50)
 
-        self.rates = rospy.get_param('~rates', {})
+        self.rates = rospy.get_param('~rates', {}) # assume that rates get loaded in from the spot_ros.yaml file through the driver.launch file
         self.username = rospy.get_param('~username', 'default_value')
         self.password = rospy.get_param('~password', 'default_value')
         self.hostname = rospy.get_param('~hostname', 'default_value')
@@ -568,6 +582,9 @@ class SpotROS():
             self.feedback_pub = rospy.Publisher('status/feedback', Feedback, queue_size=10)
 
             self.mobility_params_pub = rospy.Publisher('status/mobility_params', MobilityParams, queue_size=10)
+
+            # Local Grid Publisher
+            self.local_grid = rospy.Publisher('local_grid', GridMap , queue_size=10)
 
             rospy.Subscriber('cmd_vel', Twist, self.cmdVelCallback, queue_size = 1)
             rospy.Subscriber('body_pose', Pose, self.bodyPoseCallback, queue_size = 1)
