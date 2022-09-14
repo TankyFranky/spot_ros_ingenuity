@@ -1,3 +1,6 @@
+import sys
+
+import numpy as np
 import rospy
 
 from std_msgs.msg import Empty
@@ -8,8 +11,8 @@ from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseWithCovariance
 from geometry_msgs.msg import TwistWithCovariance
 from geometry_msgs.msg import TwistWithCovarianceStamped
-from nav_msgs.msg import Odometry
-from grid_map_msgs.msg import GridMap
+from nav_msgs.msg import Odometry, OccupancyGrid
+
 
 from spot_msgs.msg import Metrics
 from spot_msgs.msg import LeaseArray, LeaseResource
@@ -21,7 +24,7 @@ from spot_msgs.msg import BehaviorFault, BehaviorFaultState
 from spot_msgs.msg import SystemFault, SystemFaultState
 from spot_msgs.msg import BatteryState, BatteryStateArray
 
-from bosdyn.api import image_pb2
+from bosdyn.api import image_pb2, local_grid_pb2
 from bosdyn.client.math_helpers import SE3Pose
 from bosdyn.client.frame_helpers import get_odom_tform_body, get_vision_tform_body
 
@@ -199,21 +202,96 @@ def GetJointStatesFromState(state, spot_wrapper):
 
     return joint_state
 
-def GetLocalGridsFromState(grid, spot_wrapper):
-    """Maps local grid data from robot state proto to ROS GridMap message
+def CombineGrids(raw_grid, valid_grid, spot_wrapper):
+    """Performs logical and between the raw_grid and valid_grid to remove invalid measurements from a OccupancyGrid
+
+        Args:
+            raw_grid: OccupancyGrid msg with measurement
+            valid_grid: OccupancyGrid msg with binary indicators
+            spot_wrapper: A SpotWrapper object
+        Returns:
+            OccupancyGrid message
+        """
+
+    grid_map = raw_grid
+
+    raw = np.asarray(raw_grid.data)
+    valid = np.asarray(valid_grid.data)
+
+    raw[valid != 1] = -1
+
+    grid_map.data = raw.astype(dtype=np.int8)
+
+    return grid_map
+def GetLocalGridsFromState(grid, spot_wrapper, normalize='obstacle'):
+    """Maps local grid data from robot state proto to ROS OccupancyGrid message
 
     Args:
-        data: Robot State proto
+        grid: Robot State proto (LocalGridResponse)
         spot_wrapper: A SpotWrapper object
     Returns:
-        GridMap message
+        OccupancyGrid message
+
+    Assumptions: Not checking error states in the LocalGridResponse.status proto (following getImageMsg style)
     """
 
-    # terrain + terrain_valid = height map with eronious sensor readings removed
+    np.set_printoptions(threshold=sys.maxsize)
 
-    grid_map = GridMap()
-    local_time = spot_wrapper.robotToLocalTime(grid.header.response_timestamp)
+    grid_map = OccupancyGrid()
+    local_time = spot_wrapper.robotToLocalTime(grid.local_grid.acquisition_time)
+
+    # header
     grid_map.header.stamp = rospy.Time(local_time.seconds, local_time.nanos)
+    grid_map.header.frame_id = "body"
+
+    # metadata
+    grid_map.info.map_load_time = rospy.Time(local_time.seconds, local_time.nanos)
+    grid_map.info.resolution = float(grid.local_grid.extent.cell_size)  # proto stores as double
+    grid_map.info.width = grid.local_grid.extent.num_cells_x
+    grid_map.info.height = grid.local_grid.extent.num_cells_y
+
+    cell_count = grid.local_grid.extent.num_cells_x * grid.local_grid.extent.num_cells_y
+    color = np.ones([cell_count], dtype=np.int8) # array for recoloring for OccupancyGrid message
+
+    # check type and decode appropriately
+    if grid.local_grid_type_name == "no_step":
+        # unsafe (val<0) -> 0, safe (val>0) -> val * 100
+        grid_full = unpack_grid(grid).astype(np.float32)
+
+        for pos, cell in enumerate(grid_full):
+            if cell <= 0:
+                color[pos] = 10
+            elif cell > 0:
+                color[pos] = 100
+            else:
+                color[pos] = -1
+
+    elif grid.local_grid_type_name == "obstacle_distance":
+        # inside obstacle (<0) -> 0, obstacle border (0<val>0.33) -> 50 , outside obstacle (val>0) -> 100
+        grid_full = unpack_grid(grid).astype(np.float32)
+
+        for pos, cell in enumerate(grid_full):
+            if cell <= 0:
+                color[pos] = 1
+            elif cell > 0 and cell < 0.33:
+                color[pos] = 15
+            elif cell > 0.33:
+                color[pos] = 100
+            else:
+                color[pos] = -1
+
+    elif grid.local_grid_type_name == "terrain":
+        # height is scaled between 0 and 100. Heights are RAW and need to be validated with terrain_valid local grid
+        grid_full = unpack_grid(grid).astype(np.float32)
+
+        color = ((grid_full - grid_full.min()) * (1/(grid_full.max() - grid_full.min()) * 100)).astype('uint8')
+
+    elif grid.local_grid_type_name == "terrain_valid":
+        color = unpack_grid(grid)
+
+    grid_map.data = color.astype(dtype='int8')
+
+    return grid_map
 
 def GetEStopStateFromState(state, spot_wrapper):
     """Maps eStop state data from robot state proto to ROS EStopArray message
@@ -478,3 +556,49 @@ def getBehaviorFaultsFromState(state, spot_wrapper):
     behavior_fault_state_msg = BehaviorFaultState()
     behavior_fault_state_msg.faults = getBehaviorFaults(state.behavior_fault_state.faults, spot_wrapper)
     return behavior_fault_state_msg
+
+def get_numpy_data_type(local_grid_proto):
+    """Convert the cell format of the local grid proto to a numpy data type."""
+    if local_grid_proto.cell_format == local_grid_pb2.LocalGrid.CELL_FORMAT_UINT16:
+        return np.uint16
+    elif local_grid_proto.cell_format == local_grid_pb2.LocalGrid.CELL_FORMAT_INT16:
+        return np.int16
+    elif local_grid_proto.cell_format == local_grid_pb2.LocalGrid.CELL_FORMAT_UINT8:
+        return np.uint8
+    elif local_grid_proto.cell_format == local_grid_pb2.LocalGrid.CELL_FORMAT_INT8:
+        return np.int8
+    elif local_grid_proto.cell_format == local_grid_pb2.LocalGrid.CELL_FORMAT_FLOAT64:
+        return np.float64
+    elif local_grid_proto.cell_format == local_grid_pb2.LocalGrid.CELL_FORMAT_FLOAT32:
+        return np.float32
+    else:
+        return None
+
+def expand_data_by_rle_count(local_grid_proto, data_type=np.int16):
+    """Expand local grid data to full bytes data using the RLE count."""
+    cells_pz = np.frombuffer(local_grid_proto.local_grid.data, dtype=data_type)
+    cells_pz_full = []
+    # For each value of rle_counts, we expand the cell data at the matching index
+    # to have that many repeated, consecutive values.
+    for i in range(0, len(local_grid_proto.local_grid.rle_counts)):
+        for j in range(0, local_grid_proto.local_grid.rle_counts[i]):
+            cells_pz_full.append(cells_pz[i])
+    return np.array(cells_pz_full)
+
+def unpack_grid(grid):
+
+    data_type = get_numpy_data_type(grid.local_grid)
+
+    # decode local grid
+    if grid.local_grid.encoding == local_grid_pb2.LocalGrid.ENCODING_RAW:
+        full_grid = np.frombuffer(grid.local_grid.data, dtype=data_type)
+    elif grid.local_grid.encoding == local_grid_pb2.LocalGrid.ENCODING_RLE:
+        full_grid = expand_data_by_rle_count(grid, data_type=data_type)
+
+    # Apply the offset and scaling to the local grid.
+    if grid.local_grid.cell_value_scale != 0:
+        full_grid = full_grid.astype(np.float64)
+        full_grid *= grid.local_grid.cell_value_scale
+        full_grid += grid.local_grid.cell_value_offset
+
+    return full_grid

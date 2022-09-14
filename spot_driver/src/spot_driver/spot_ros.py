@@ -7,8 +7,8 @@ from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import TwistWithCovarianceStamped, Twist, Pose
-from nav_msgs.msg import Odometry
-from grid_map_msgs.msg import GridMap
+from nav_msgs.msg import Odometry, OccupancyGrid
+
 
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.api import geometry_pb2, trajectory_pb2
@@ -246,7 +246,20 @@ class SpotROS():
         data = self.spot_wrapper.local_grids
 
         if data:
-
+            # terrain grid
+            terrain_grid_msg = GetLocalGridsFromState(data[0], self.spot_wrapper)
+            self.terrain_grid.publish(terrain_grid_msg)
+            # valid grid
+            valid_grid_msg = GetLocalGridsFromState(data[1], self.spot_wrapper)
+            # valid terrain
+            terrain_valid_grid_msg = CombineGrids(terrain_grid_msg, valid_grid_msg, self.spot_wrapper)
+            self.valid_grid.publish(terrain_valid_grid_msg)
+            # step grid
+            step_grid_msg = GetLocalGridsFromState(data[3], self.spot_wrapper)
+            self.step_grid.publish(step_grid_msg)
+            # obstacle grid
+            obstacle_grid_msg = GetLocalGridsFromState(data[4], self.spot_wrapper)
+            self.obstacle_grid.publish(obstacle_grid_msg)
 
     def handle_claim(self, req):
         """ROS service handler for the claim service"""
@@ -584,7 +597,10 @@ class SpotROS():
             self.mobility_params_pub = rospy.Publisher('status/mobility_params', MobilityParams, queue_size=10)
 
             # Local Grid Publisher
-            self.local_grid = rospy.Publisher('local_grid', GridMap , queue_size=10)
+            self.terrain_grid = rospy.Publisher('local_grid/terrain_grid', OccupancyGrid , queue_size=10)
+            self.valid_grid = rospy.Publisher('local_grid/valid_grid', OccupancyGrid, queue_size=10)
+            self.step_grid = rospy.Publisher('local_grid/step_grid', OccupancyGrid, queue_size=10)
+            self.obstacle_grid = rospy.Publisher('local_grid/obstacle_grid', OccupancyGrid, queue_size=10)
 
             rospy.Subscriber('cmd_vel', Twist, self.cmdVelCallback, queue_size = 1)
             rospy.Subscriber('body_pose', Pose, self.bodyPoseCallback, queue_size = 1)
