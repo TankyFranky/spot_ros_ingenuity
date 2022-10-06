@@ -237,7 +237,7 @@ class SpotROS():
             self.populate_camera_static_transforms(data[1])
 
     def LocalGridCB(self, results):
-        """Callback for when the Spot Wrapper gets new rear image data.
+        """Callback for when the Spot Wrapper gets new local grid data.
 
         Args:
             results: FutureWrapper object of AsyncPeriodicQuery callback
@@ -518,7 +518,7 @@ class SpotROS():
         rospy.init_node('spot_ros', anonymous=True)
         rate = rospy.Rate(50)
 
-        self.rates = rospy.get_param('~rates', {}) # assume that rates get loaded in from the spot_ros.yaml file through the driver.launch file
+        self.rates = rospy.get_param('~rates', {})
         self.username = rospy.get_param('~username', 'default_value')
         self.password = rospy.get_param('~password', 'default_value')
         self.hostname = rospy.get_param('~hostname', 'default_value')

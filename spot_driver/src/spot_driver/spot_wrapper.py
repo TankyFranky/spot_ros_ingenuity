@@ -264,7 +264,6 @@ class SpotWrapper():
         for source in rear_image_sources:
             self._rear_image_requests.append(build_image_request(source, image_format=image_pb2.Image.FORMAT_RAW))
 
-        # Leaving this in here for now, just until testing completes
         self._local_grid_requests = []
         for grid in local_grid_sources:
             self._local_grid_requests.append(grid) # redundant but follows formatting

@@ -235,8 +235,6 @@ def GetLocalGridsFromState(grid, spot_wrapper, normalize='obstacle'):
     Assumptions: Not checking error states in the LocalGridResponse.status proto (following getImageMsg style)
     """
 
-    np.set_printoptions(threshold=sys.maxsize)
-
     grid_map = OccupancyGrid()
     local_time = spot_wrapper.robotToLocalTime(grid.local_grid.acquisition_time)
 

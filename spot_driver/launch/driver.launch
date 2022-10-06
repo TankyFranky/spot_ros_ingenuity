@@ -1,6 +1,6 @@
 <launch>
-  <arg name="username" default="francesco" />
-  <arg name="password" default="Bad@Coffee24" />
+  <arg name="username" default="DummyUser" />
+  <arg name="password" default="DummyPassword" />
   <arg name="hostname" default="10.0.0.5" />
   <arg name="estop_timeout" default="9.0"/>
 
